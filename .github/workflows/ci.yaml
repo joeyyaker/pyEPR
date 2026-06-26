@@ -47,6 +47,25 @@ jobs:
       - run: python -m pip install ".[test]"
       - run: pytest tests/ -m "not hfss" -q
 
+  test_pyaedt:
+    # Verify the optional [pyaedt] extra is installable and the gRPC connection
+    # path's offline tests pass with PyAEDT present. The live (@pytest.mark.hfss)
+    # tests still require a real AEDT licence and remain excluded.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pyaedt-${{ hashFiles('pyproject.toml') }}-${{ env.PIPCACHEVERSION }}
+      - run: python -m pip install ".[pyaedt,test]"
+      - name: Import smoke test (gRPC connection helper importable with PyAEDT installed)
+        run: python -c "import pyEPR; from pyEPR.ansys import get_pyaedt_app_desktop"
+      - run: pytest tests/test_pyaedt_grpc.py -m "not hfss" -q
+
   test_docs:
     runs-on: ubuntu-latest
     steps:
