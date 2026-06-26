@@ -61,7 +61,9 @@ jobs:
         with:
           path: ~/.cache/pip
           key: pyaedt-${{ hashFiles('pyproject.toml') }}-${{ env.PIPCACHEVERSION }}
-      - run: python -m pip install ".[pyaedt,test]"
+      # Pin the validated ansys-aedt-core for deterministic CI; the [pyaedt]
+      # extra itself allows the wider >=0.21,<1.0 range for users.
+      - run: python -m pip install ".[pyaedt,test]" "ansys-aedt-core==0.21.2"
       - name: Import smoke test (gRPC connection helper importable with PyAEDT installed)
         run: python -c "import pyEPR; from pyEPR.ansys import get_pyaedt_app_desktop"
       - run: pytest tests/test_pyaedt_grpc.py -m "not hfss" -q
