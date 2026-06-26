@@ -102,6 +102,11 @@ epra.analyze_all_variations(cos_trunc=8, fock_trunc=15)
 epra.plot_hamiltonian_results(swp_variable='Lj_alice')
 ```
 
+> **No COM?** Pass `use_pyaedt=True` to `ProjectInfo` to run this same workflow
+> through Ansys's official PyAEDT API entirely over gRPC instead of COM
+> (`pip install "pyEPR-quantum[pyaedt]"`). The COM path is unchanged by default.
+> See [Running over PyAEDT (gRPC)](https://pyepr-docs.readthedocs.io/en/latest/pyaedt_grpc.html).
+
 ## Documentation
 
 **Full docs, API reference, and guides:** [pyepr-docs.readthedocs.io](https://pyepr-docs.readthedocs.io)

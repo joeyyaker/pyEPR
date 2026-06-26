@@ -366,7 +366,7 @@ def set_property(prop_holder, prop_tab, prop_server, name, value, prop_args=None
 
 
 class HfssApp(COMWrapper):
-    def __init__(self, ProgID="AnsoftHfss.HfssScriptInterface"):
+    def __init__(self, ProgID="AnsoftHfss.HfssScriptInterface", _oapp=None):
         """
         Connect to IDispatch-based COM object.
             Parameter is the ProgID or CLSID of the COM object.
@@ -376,9 +376,13 @@ class HfssApp(COMWrapper):
             v2016 - 'Ansoft.ElectronicsDesktop'
             v2017 and subsequent - 'AnsoftHfss.HfssScriptInterface'
 
+        ``_oapp`` lets the caller inject an already-obtained scripting object
+        (e.g. PyAEDT's gRPC ``hfss.odesktop``) instead of dispatching a COM
+        object.  PyAEDT's gRPC handles mirror the COM scripting API, so the rest
+        of the wrapper tree works unchanged.  See :func:`get_pyaedt_app_desktop`.
         """
         super(HfssApp, self).__init__()
-        self._app = Dispatch(ProgID)
+        self._app = _oapp if _oapp is not None else Dispatch(ProgID)
 
     def get_app_desktop(self):
         return HfssDesktop(self, self._app.GetAppDesktop())
@@ -394,6 +398,11 @@ class HfssDesktop(COMWrapper):
         super(HfssDesktop, self).__init__()
         self.parent = app
         self._desktop = desktop
+
+        # True when this session is driven over PyAEDT's gRPC transport rather
+        # than COM.  Set by get_pyaedt_app_desktop() and propagated down to the
+        # design so CalcObject.evaluate() reads results back in a gRPC-safe way.
+        self._is_grpc = False
 
         # ansys version, needed to check for command changes,
         # since some commands have changed over the years
@@ -486,6 +495,7 @@ class HfssProject(COMWrapper):
         self._project = project
         # self.name = project.GetName()
         self._ansys_version = self.parent.version
+        self._is_grpc = getattr(desktop, "_is_grpc", False)
 
     def close(self):
         self._project.Close()
@@ -704,6 +714,7 @@ class HfssDesign(COMWrapper):
         self._design = design
         self.name = design.GetName()
         self._ansys_version = self.parent._ansys_version
+        self._is_grpc = getattr(self.parent, "_is_grpc", False)
 
         try:
             # GetSolutionType() does not exist for non-HFSS designs (e.g. Q3D).
@@ -3692,6 +3703,24 @@ class CalcObject(COMWrapper):
         if isinstance(self.setup, HfssDMSetup):
             args.extend(["Freq:=", self.setup.solution_freq])
 
+        if getattr(self.setup.parent, "_is_grpc", False):
+            # gRPC-safe read-back: write the calculator result to a .fld file and
+            # read the last line.  The ClcEval / GetTopEntryValue round-trip below
+            # is the one field-calculator call that does not survive gRPC; every
+            # other call (EnterQty, ClcMaterial, EnterVol, EnterLine, Integrate)
+            # works unchanged over both transports.
+            fld = os.path.join(tempfile.gettempdir(), "pyEPR_calc_eval.fld")
+            if os.path.isfile(fld):
+                os.remove(fld)
+            self.calc_module.CalculatorWrite(fld, ["Solution:=", setup_name], args)
+            with open(fld) as fh:
+                value = float(fh.readlines()[-1].strip())
+            try:
+                os.remove(fld)
+            except OSError:
+                pass
+            return value
+
         self.calc_module.ClcEval(setup_name, args)
         return float(self.calc_module.GetTopEntryValue(setup_name, args)[0])
 
@@ -3750,8 +3779,69 @@ def get_report_arrays(name: str):
     return r.get_arrays()
 
 
+def get_pyaedt_app_desktop(
+    aedt_version: str = "2024.1",
+    non_graphical: bool = False,
+    new_desktop: bool = False,
+    project_path: str = None,
+):
+    """Open/attach an AEDT session through PyAEDT (gRPC) and wrap it in pyEPR's
+    COM-object tree, so :class:`DistributedAnalysis` runs entirely over gRPC —
+    no COM.
+
+    PyAEDT's gRPC scripting handles mirror the COM scripting API, so the existing
+    :class:`HfssDesktop` / :class:`HfssProject` / :class:`HfssDesign` wrappers
+    work unchanged once seeded with ``hfss.odesktop``.  The desktop is flagged
+    ``_is_grpc=True`` (propagated to the design) so :meth:`CalcObject.evaluate`
+    reads results back with ``CalculatorWrite`` — the one call that does not
+    survive gRPC — instead of ``ClcEval`` / ``GetTopEntryValue``.
+
+    Returns ``(app, desktop)`` like :meth:`HfssApp.get_app_desktop`.
+    """
+    try:
+        from ansys.aedt.core import Hfss
+    except ImportError as exc:
+        raise ImportError(
+            "PyAEDT is required for use_pyaedt=True. "
+            "Install it with `pip install ansys-aedt-core`."
+        ) from exc
+
+    hfss = Hfss(
+        project=project_path, version=aedt_version,
+        non_graphical=non_graphical, new_desktop=new_desktop,
+    )
+    app = HfssApp(_oapp=hfss.odesktop)
+    desktop = HfssDesktop(app, hfss.odesktop)
+    desktop._is_grpc = True
+    desktop._pyaedt_hfss = hfss  # keep the PyAEDT session alive
+
+    # Release the gRPC session on disconnect()/exit. Only close the desktop we
+    # ourselves started (new_desktop=True); when attaching to a running session
+    # leave it — and the user's project — open. Idempotent: release() also fires
+    # at exit, so guard against a double release_desktop.
+    _released = []
+
+    def _release_pyaedt(_hfss=hfss, _own=new_desktop, _once=_released):
+        if _once:
+            return
+        _once.append(True)
+        try:
+            _hfss.release_desktop(close_projects=_own, close_desktop=_own)
+        except Exception:  # pragma: no cover - cleanup must never raise
+            pass
+
+    _add_release_fn(_release_pyaedt)
+    return app, desktop
+
+
 def load_ansys_project(
-    proj_name: str, project_path: str = None, extension: str = ".aedt"
+    proj_name: str,
+    project_path: str = None,
+    extension: str = ".aedt",
+    use_pyaedt: bool = False,
+    aedt_version: str = "2024.1",
+    non_graphical: bool = False,
+    new_desktop: bool = False,
 ):
     """
     Utility function to load an Ansys project.
@@ -3759,6 +3849,10 @@ def load_ansys_project(
     Args:
         proj_name : None  --> get active. (make sure 2 run as admin)
         extension : `aedt` is for 2016 version and newer
+        use_pyaedt : connect over PyAEDT's gRPC transport instead of COM.
+            When ``False`` (default) the COM path is used and unchanged.
+        aedt_version / non_graphical / new_desktop : forwarded to PyAEDT when
+            ``use_pyaedt=True``.
     """
     if project_path:
         # convert slashes correctly for system
@@ -3786,10 +3880,17 @@ def load_ansys_project(
                 "\t\tFile is locked. \N{FEARFUL FACE} If connection fails, delete the .lock file."
             )
 
-    app = HfssApp()
-    logger.info("\tOpened Ansys App")
-
-    desktop = app.get_app_desktop()
+    if use_pyaedt:
+        app, desktop = get_pyaedt_app_desktop(
+            aedt_version=aedt_version, non_graphical=non_graphical,
+            new_desktop=new_desktop,
+            project_path=str(project_path) if project_path else None,
+        )
+        logger.info("\tOpened Ansys App via PyAEDT (gRPC)")
+    else:
+        app = HfssApp()
+        logger.info("\tOpened Ansys App")
+        desktop = app.get_app_desktop()
     logger.info(f"\tOpened Ansys Desktop v{desktop.get_version()}")
     # logger.debug(f"\tOpen projects: {desktop.get_project_names()}")
 

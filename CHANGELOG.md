@@ -5,6 +5,25 @@ Versions follow [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### New features
+
+- **Optional PyAEDT (gRPC) connection for HFSS** (`ProjectInfo(..., use_pyaedt=True)`).
+  pyEPR's existing `DistributedAnalysis` can now drive HFSS through Ansys's official
+  PyAEDT API (`ansys-aedt-core`) entirely over gRPC, with no COM / `pywin32`.
+  This is additive and surgical: the COM path is byte-for-byte unchanged when
+  `use_pyaedt=False` (the default). PyAEDT's gRPC scripting handles mirror the COM
+  API, so the whole `HfssDesktop` / `HfssProject` / `HfssDesign` wrapper tree is
+  reused; the session is flagged `_is_grpc` so `CalcObject.evaluate` reads
+  field-calculator results back with `CalculatorWrite` — the one call that does not
+  survive gRPC — instead of `ClcEval` / `GetTopEntryValue`. Connecting this way
+  attaches to the AEDT instance that owns the project, avoiding stale-session and
+  *project-locked* errors common with COM. Validated digit-for-digit against the COM
+  path (`p_mj = 0.9755` on a demo transmon). PyAEDT is imported lazily, only when
+  `use_pyaedt=True`, behind the new `[pyaedt]` optional extra. See
+  `_tutorial_notebooks/` and the new docs page.
+
 ## [0.9.5] — 2026-05-17
 
 ### New features

@@ -108,6 +108,7 @@ Contents
    hfss_setup.rst
    examples_quick.rst
    without_hfss.rst
+   pyaedt_grpc.rst
    tutorials.rst
    troubleshooting.rst
 

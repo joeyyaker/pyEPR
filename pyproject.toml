@@ -67,6 +67,12 @@ test = [
     "pytest>=7.0",
     "pytest-cov",
 ]
+# Optional PyAEDT (gRPC) connection for HFSS — ProjectInfo(use_pyaedt=True).
+# Talks to HFSS through Ansys's official PyAEDT API instead of COM. Windows-only.
+pyaedt = [
+    "ansys-aedt-core>=0.21",
+    "pywin32; platform_system == 'Windows'",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

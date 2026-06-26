@@ -182,6 +182,10 @@ class ProjectInfo(object):
         seams: list = None,
         junctions: dict = None,
         do_connect: bool = True,
+        use_pyaedt: bool = False,
+        aedt_version: str = "2024.1",
+        non_graphical: bool = False,
+        new_desktop: bool = False,
     ):
         """
         Keyword Arguments:
@@ -224,6 +228,14 @@ class ProjectInfo(object):
         self.project_name = project_name
         self.design_name = design_name
         self.setup_name = setup_name
+
+        # Connect over PyAEDT's gRPC transport instead of COM (additive; the COM
+        # path is unchanged when use_pyaedt is False). PyAEDT is imported lazily,
+        # only when use_pyaedt=True, so it stays an optional dependency.
+        self.use_pyaedt = use_pyaedt
+        self.aedt_version = aedt_version
+        self.non_graphical = non_graphical
+        self.new_desktop = new_desktop
 
         # HFSS design: describe junction parameters
         # TODO: introduce modal labels
@@ -289,7 +301,9 @@ class ProjectInfo(object):
         logger.info("Connecting to Ansys Desktop API...")
 
         self.app, self.desktop, self.project = ansys.load_ansys_project(
-            self.project_name, self.project_path
+            self.project_name, self.project_path,
+            use_pyaedt=self.use_pyaedt, aedt_version=self.aedt_version,
+            non_graphical=self.non_graphical, new_desktop=self.new_desktop,
         )
 
         if self.project:
